@@ -1,7 +1,7 @@
-cdetr-finetuned-10k-steps/
+lightning_logs
 lightning_logs/
+ckpts
 ckpts/
 wandb/
-detr-finetuned-10k-steps/
-cdetr-finetuned-2-10k-steps/
+chekpoints
 checkpoints/

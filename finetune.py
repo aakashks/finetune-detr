@@ -37,8 +37,6 @@ check_min_version("4.51.0")
 require_version("datasets>=2.0.0", "To fix: pip install -r examples/pytorch/object-detection/requirements.txt")
 
 
-DATA_DIR = "/home/singh/workspace/iva/data/joint_55_56"
-
 @dataclass
 class ModelOutput:
     logits: torch.Tensor
@@ -104,6 +102,7 @@ def convert_bbox_yolo_to_pascal(boxes: torch.Tensor, image_size: Tuple[int, int]
 
 def augment_and_transform_batch(
     examples: Mapping[str, Any],
+    data_dir: str,
     transform: A.Compose,
     image_processor: AutoImageProcessor,
     return_pixel_mask: bool = False,
@@ -113,7 +112,7 @@ def augment_and_transform_batch(
     images = []
     annotations = []
     for image_id, file_name, objects in zip(examples["image_id"], examples["file_name"], examples["objects"]):
-        image = Image.open(os.path.join(DATA_DIR, file_name))
+        image = Image.open(os.path.join(data_dir, file_name))
         image = np.array(image.convert("RGB"))
 
         # apply augmentations
@@ -230,6 +229,12 @@ class DataTrainingArguments:
             "help": "Name of a dataset from the hub (could be your own, possibly private dataset hosted on the hub)."
         },
     )
+    dataset_path: str = field(
+        default="/home/singh/workspace/iva/data/combined",
+        metadata={
+            "help": "Path to the dataset. If not specified, will use the dataset from the hub."
+        },
+    )
     dataset_config_name: Optional[str] = field(
         default=None, metadata={"help": "The configuration name of the dataset to use (via the datasets library)."}
     )
@@ -310,6 +315,10 @@ class ModelArguments:
             )
         },
     )
+    lr_backbone: float = field(
+        default=1e-5,
+        metadata={"help": "Learning rate for the backbone parameters."},
+    )
 
 
 def main():
@@ -374,7 +383,8 @@ def main():
     # Load dataset, prepare splits
     # ------------------------------------------------------------------------------------------------
 
-    dataset = load_dataset("json", data_files=f"{DATA_DIR}/metadata.jsonl")
+    dataset = load_dataset("json", data_files=f"{data_args.dataset_path}/metadata.jsonl")
+    DATA_DIR = data_args.dataset_path
 
     # If we don't have a validation split, split off a percentage of train as validation
     data_args.train_val_split = None if "validation" in dataset.keys() else data_args.train_val_split
@@ -468,10 +478,10 @@ def main():
 
     # Make transform functions for batch and apply for dataset splits
     train_transform_batch = partial(
-        augment_and_transform_batch, transform=train_augment_and_transform, image_processor=image_processor
+        augment_and_transform_batch, transform=train_augment_and_transform, image_processor=image_processor, data_dir=DATA_DIR
     )
     validation_transform_batch = partial(
-        augment_and_transform_batch, transform=validation_transform, image_processor=image_processor
+        augment_and_transform_batch, transform=validation_transform, image_processor=image_processor, data_dir=DATA_DIR
     )
 
     dataset["train"] = dataset["train"].with_transform(train_transform_batch)
@@ -485,6 +495,14 @@ def main():
     eval_compute_metrics_fn = partial(
         compute_metrics, image_processor=image_processor, id2label=id2label, threshold=0.0
     )
+    
+    param_dicts = [
+            {"params": [p for n, p in model.named_parameters() if "backbone" not in n and p.requires_grad], "lr": training_args.learning_rate},
+            {
+                "params": [p for n, p in model.named_parameters() if "backbone" in n and p.requires_grad],
+                "lr": model_args.lr_backbone,
+            },
+    ]
 
     trainer = Trainer(
         model=model,
@@ -494,7 +512,21 @@ def main():
         processing_class=image_processor,
         data_collator=collate_fn,
         compute_metrics=eval_compute_metrics_fn,
-        
+    )
+    
+    optimizer_cls, optimizer_params = Trainer.get_optimizer_cls_and_kwargs(training_args)
+    optimizer = optimizer_cls(param_dicts, **optimizer_params)
+    lr_scheduler = trainer.lr_scheduler
+    
+    trainer = Trainer(
+        model=model,
+        args=training_args,
+        train_dataset=dataset["train"] if training_args.do_train else None,
+        eval_dataset=dataset["validation"] if training_args.do_eval else None,
+        processing_class=image_processor,
+        data_collator=collate_fn,
+        compute_metrics=eval_compute_metrics_fn,
+        optimizers=(optimizer, lr_scheduler)
     )
 
     # Training

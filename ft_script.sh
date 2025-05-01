@@ -1,16 +1,16 @@
 CUDA_VISIBLE_DEVICES=2 python finetune.py \
-    --model_name_or_path microsoft/conditional-detr-resnet-50 \
-    --output_dir ckpts/cdetr-finetuned-4-10k-steps \
+    --model_name_or_path facebook/detr-resnet-50 \
+    --output_dir ckpts/detr-finetuned-combined-1-500-epochs \
     --dataset_name cppe-5 \
+    --dataset_path /home/singh/workspace/iva/data/combined \
     --do_train true \
     --do_eval true \
-    --num_train_epochs 100 \
+    --num_train_epochs 500 \
     --image_square_size 600 \
     --fp16 true \
-    --learning_rate 5e-5 \
+    --learning_rate 1e-4 \
     --lr_backbone 1e-5 \
     --weight_decay 1e-4 \
-    --max_grad_norm 0.1 \
     --lr_scheduler_type linear \
     --dataloader_num_workers 8 \
     --dataloader_prefetch_factor 4 \
@@ -29,9 +29,9 @@ CUDA_VISIBLE_DEVICES=2 python finetune.py \
     --push_to_hub false \
     --push_to_hub_model_id cdetr-finetuned-4-10k-steps \
     --hub_strategy end \
-    --seed 2025 \
-    --overwrite_output_dir
+    --seed 2025
 
 
+# --overwrite_output_dir
 
 # facebook/detr-resnet-50
