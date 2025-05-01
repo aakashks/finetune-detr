@@ -1,3 +1,3 @@
-# Detection Transformer for Object Detection
+# Fine-Tuning Detection Transformer for Object Detection on Autonomous Driving Dataset
 
-Finetuning DETR for custom dataset of autonomous driving
+DETR Model fine tuning scripts and notebooks
