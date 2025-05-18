@@ -2,7 +2,7 @@ CUDA_VISIBLE_DEVICES=2 python finetune.py \
     --model_name_or_path facebook/detr-resnet-50 \
     --output_dir ckpts/detr-finetuned-combined-1-500-epochs \
     --dataset_name cppe-5 \
-    --dataset_path /home/singh/workspace/iva/data/combined \
+    --dataset_path ./workspace/iva/data/combined \
     --do_train true \
     --do_eval true \
     --num_train_epochs 500 \

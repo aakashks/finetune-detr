@@ -230,7 +230,7 @@ class DataTrainingArguments:
         },
     )
     dataset_path: str = field(
-        default="/home/singh/workspace/iva/data/combined",
+        default="./workspace/iva/data/combined",
         metadata={
             "help": "Path to the dataset. If not specified, will use the dataset from the hub."
         },

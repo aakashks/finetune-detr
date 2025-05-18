@@ -3,7 +3,7 @@ import os
 import sys
 from dataclasses import dataclass, field, make_dataclass
 from datetime import datetime
-import torchvision
+
 import numpy as np
 import pytorch_lightning as pl
 import torch
@@ -12,11 +12,13 @@ from PIL import Image
 from pytorch_lightning import Trainer
 from torch.utils.data import DataLoader, Dataset
 from transformers import DetrForObjectDetection, DetrImageProcessor
+from pytorch_lightning.loggers import WandbLogger
+import wandb
 
 seed = 5012025
 num_workers = 8
-dataset_path = "/home/singh/workspace/iva/data/combined"
-val_dataset_path = "/home/singh/workspace/iva/data/55_all"
+train_val_split = 0.15
+dataset_path = "./workspace/iva/data/combined"
 batch_size = 16
 val_batch_size = 32
 lr = 1e-4
@@ -28,7 +30,17 @@ max_epochs = 100
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 timestamp = datetime.now().strftime("%m-%d_%H-%M")
 
+dataset = load_dataset("json", data_files=f"{dataset_path}/metadata.jsonl")
 
+
+train_val_split = None if "validation" in dataset.keys() else train_val_split
+if isinstance(train_val_split, float) and train_val_split > 0.0:
+    split = dataset["train"].train_test_split(train_val_split, seed=seed)
+    dataset["train"] = split["train"]
+    dataset["validation"] = split["test"]
+
+# Get dataset categories and prepare mappings for label_name <-> label_id
+# categories = dataset["train"].features["objects"].feature["category"].names
 id2label = {
     0: "biker",
     1: "car",
@@ -48,29 +60,58 @@ label2id = {v: k for k, v in id2label.items()}
 
 image_processor = DetrImageProcessor.from_pretrained("facebook/detr-resnet-50")
 
-class CocoDetection(torchvision.datasets.CocoDetection):
-    def __init__(self, img_folder, processor, train=True):
-        ann_file = os.path.join(img_folder, "annotations.json" if train else "annotations.json")
-        super().__init__(img_folder, ann_file)
+class HFDetectionDataset(Dataset):
+    def __init__(self, dataset, img_folder, processor, split="train"):
+        self.dataset = dataset[split]  # HF dataset split
+        self.img_folder = img_folder   # Root directory with images
         self.processor = processor
-
+    
+    def __len__(self):
+        return len(self.dataset)
+    
     def __getitem__(self, idx):
-        # read in PIL image and target in COCO format
-        # feel free to add data augmentation here before passing them to the next step
-        img, target = super().__getitem__(idx)
-
-        # preprocess image and target (converting target to DETR format, resizing + normalization of both image and target)
-        image_id = self.ids[idx]
-        target = {'image_id': image_id, 'annotations': target}
+        # Get sample from HF dataset
+        sample = self.dataset[idx]
+        
+        # Load image from file
+        image_path = os.path.join(self.img_folder, sample["file_name"])
+        img = Image.open(image_path).convert("RGB")
+        
+        # Format bboxes and annotations for DETR
+        objects = sample["objects"]
+        bboxes = objects["bbox"]  # List of bboxes [x, y, width, height]
+        categories = objects["categories"]  # List of category IDs
+        
+        # Convert to COCO format
+        annotations = []
+        for i, (bbox, category_id) in enumerate(zip(bboxes, categories)):
+            x, y, width, height = bbox
+            
+            annotation = {
+                "id": objects["id"][i] if "id" in objects else i,
+                "image_id": sample["image_id"],
+                "bbox": bbox,  # [x, y, width, height]
+                "category_id": category_id,
+                "area": objects["areas"][i] if "areas" in objects else width * height,
+                "iscrowd": 0
+            }
+            annotations.append(annotation)
+        
+        # Format target in DETR expected format
+        target = {'image_id': sample["image_id"], 'annotations': annotations}
+        
+        # Process image and annotations
         encoding = self.processor(images=img, annotations=target, return_tensors="pt")
-        pixel_values = encoding["pixel_values"].squeeze() # remove batch dimension
-        target = encoding["labels"][0] # remove batch dimension
-
+        pixel_values = encoding["pixel_values"].squeeze()  # remove batch dimension
+        target = encoding["labels"][0]  # remove batch dimension
+        
         return pixel_values, target
 
 
-train_dataset = CocoDetection(img_folder=dataset_path, processor=image_processor)
-val_dataset = CocoDetection(img_folder=val_dataset_path, processor=image_processor, train=False)
+
+train_dataset = HFDetectionDataset(dataset, dataset_path, image_processor, split="train")
+val_dataset = HFDetectionDataset(dataset, dataset_path, image_processor, split="validation")
+
 
 print("Number of training examples:", len(train_dataset))
 print("Number of validation examples:", len(val_dataset))
@@ -162,17 +203,19 @@ class Detr(pl.LightningModule):
 
 
 # Initialize wandb logger
+wandb_logger = WandbLogger(project="detr-object-detection", name=f"detr-ft-{max_epochs}-epochs-{timestamp}")
+
 model = Detr(lr=lr, lr_backbone=lr_backbone, weight_decay=weight_decay)
 
 
-trainer = Trainer(max_epochs=max_epochs, gradient_clip_val=0.1)
+trainer = Trainer(max_epochs=max_epochs, gradient_clip_val=0.1, logger=wandb_logger)
 trainer.fit(model)
 
 
 from transformers import Trainer as TransformersTrainer
 from transformers import TrainingArguments
 
-model_save_path = f"ckpts/detr-simple-ft-{max_epochs}-epochs-{timestamp}"
+model_save_path = f"ckpts/detr-simple-2-ft-{max_epochs}-epochs-{timestamp}"
 trainer = TransformersTrainer(model=model.model, processing_class=image_processor, data_collator=collate_fn, args=TrainingArguments(output_dir=model_save_path))
 trainer.save_model()
 
